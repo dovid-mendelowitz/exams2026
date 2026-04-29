@@ -1,70 +1,77 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
+from supabase import create_client
 import datetime
 
-# הגדרות תצוגה
-st.set_page_config(page_title="מערכת בחינות 2026", layout="centered")
+# הגדרות בסיסיות
+st.set_page_config(page_title="מערכת בחינות 2026", layout="wide")
 st.markdown("""<style>body, .stApp {direction: rtl; text-align: right;}</style>""", unsafe_allow_html=True)
 
-# חיבור מאובטח למסד הנתונים
+# חיבור ל-Supabase דרך ה-Secrets
 @st.cache_resource
 def init_connection():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = init_connection()
 
-# ניהול שלבים
 if 'step' not in st.session_state:
     st.session_state.step = 1
 
-# --- מסך מנהל כללי סודי ---
-# אם מזינים בסמל מוסד "000000", נפתח הדשבורד שלך
-def show_admin():
-    st.title("👑 דשבורד ניהול רשת")
-    res = supabase.table("school_reports").select("*").execute()
-    if res.data:
-        df = pd.DataFrame(res.data)
-        st.dataframe(df)
-    if st.button("חזרה למסך רגיל"):
+# --- פונקציית דשבורד מנהל כללי ---
+def show_admin_dashboard():
+    st.title("👑 דשבורד מנהל כללי - תמונת מצב רשתית")
+    try:
+        res = supabase.table("school_reports").select("*").execute()
+        if res.data:
+            df = pd.DataFrame(res.data)
+            df['אחוז ביצוע'] = (df['completed_exams'] / df['target_exams'] * 100).round(1)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("טרם התקבלו דיווחים מהמוסדות.")
+    except Exception as e:
+        st.error(f"שגיאה במשיכת נתונים: {e}")
+    
+    if st.button("חזרה למסך ראשי"):
         st.session_state.step = 1
         st.rerun()
 
-# --- שלב 1: פרטי מוסד ---
+# --- שלב 1: הזדהות ---
 if st.session_state.step == 1:
-    st.title("🛡️ שלב 1: הזדהות")
+    st.title("🛡️ מערכת ניהול בחינות 2026 - כניסה")
     with st.form("login"):
-        s_id = st.text_input("סמל מוסד")
-        s_name = st.text_input("שם המוסד")
+        school_id = st.text_input("סמל מוסד")
+        school_name = st.text_input("שם המוסד")
         submitted = st.form_submit_button("המשך")
+        
         if submitted:
-            if s_id == "000000": # קוד כניסה למנהל על
+            if school_id == "000000": # קוד סודי עבורך
                 st.session_state.step = "admin"
                 st.rerun()
-            st.session_state.school_data = {"סמל": s_id, "שם": s_name}
-            st.session_state.step = 2
-            st.rerun()
+            elif school_id and school_name:
+                st.session_state.school_data = {"סמל": school_id, "שם": school_name}
+                st.session_state.step = 2
+                st.rerun()
 
-# --- שלב 2: העלאה ושמירה ---
+# --- שלב 2: ניתוח ושמירה ---
 elif st.session_state.step == 2:
-    st.title("📂 העלאת נתונים")
-    st.write(f"מוסד: {st.session_state.school_data['שם']}")
+    st.title(f"📂 ניתוח נתונים: {st.session_state.school_data['שם']}")
     
-    up_file = st.file_uploader("העלה אקסל מצבת תלמידים", type=['xlsx'])
+    # כאן המנהל יעלה את הקבצים (כרגע סימולציה של שמירה)
+    st.info("כאן המערכת תבצע את ניתוח האקסלים שהעלית.")
     
-    if up_file:
-        # כאן תבוא לוגיקת הניתוח המלאה שכתבנו
-        st.success("הקובץ נותח בהצלחה!")
-        
-        if st.button("🚀 שלח דוח סופי להנהלה"):
-            data = {
-                "school_id": st.session_state.school_data["סמל"],
-                "school_name": st.session_state.school_data["שם"],
-                "completed_exams": 150, # דוגמה לנתון מחושב
-                "target_exams": 550
-            }
+    # כפתור דיווח להנהלה
+    if st.button("🚀 סיים ודווח להנהלה"):
+        data = {
+            "school_id": st.session_state.school_data["סמל"],
+            "school_name": st.session_state.school_data["שם"],
+            "completed_exams": 100, # נתון שיחושב מהאקסל
+            "target_exams": 550,   # נתון שיחושב מהאקסל
+        }
+        try:
             supabase.table("school_reports").upsert(data).execute()
-            st.success("הנתונים נשמרו בענן!")
+            st.success("הנתונים נשמרו בהצלחה בדשבורד המנהל הכללי!")
+        except Exception as e:
+            st.error(f"שגיאה בשמירה: {e}")
 
 elif st.session_state.step == "admin":
-    show_admin()
+    show_admin_dashboard()
