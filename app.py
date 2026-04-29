@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 import io
+import msoffcrypto
 
 # --- הגדרות דף ---
 st.set_page_config(page_title="מערכת ניהול בחינות 2026", layout="wide")
@@ -31,33 +32,32 @@ SUBJECTS_ORDER = [
 # --- פונקציות עזר לניתוח ---
 
 def load_excel_safely(uploaded_file, password=None):
-    """טוען אקסל גם אם הוא מוגן בסיסמה"""
+    """טוען אקסל גם אם הוא מוגן בסיסמה בעזרת msoffcrypto"""
     try:
         if password:
-            # שימוש ב-msoffice-crypt (נדרש להתקין בשלב הבא ב-requirements)
-            return pd.read_excel(uploaded_file, password=password)
+            office_file = msoffcrypto.OfficeFile(uploaded_file)
+            office_file.load_key(password=password)
+            decrypted = io.BytesIO()
+            office_file.decrypt(decrypted)
+            return pd.read_excel(decrypted)
         else:
             return pd.read_excel(uploaded_file)
     except Exception as e:
-        st.error(f"לא ניתן לפתוח את הקובץ. אם הוא מוגן, ודא שהזנת סיסמה נכונה. שגיאה: {e}")
+        st.error(f"לא ניתן לפתוח את הקובץ. ודא שהסיסמה נכונה. שגיאה: {e}")
         return None
 
 def process_data(df_st, df_gr):
     """מנתח את מצבת התלמידים והציונים"""
-    # 1. ספירת תלמידים שכבות י'-י"ב
-    # מניחים שעמודת הכיתה נקראת 'שכבה/ כיתת אם' כפי שמופיע בדוחות משרד החינוך
     mask = df_st['שכבה/ כיתת אם'].astype(str).str.contains("י'|י''א|י''ב", na=False)
     student_count = len(df_st[mask])
     target = student_count * 5.5
     
     done_count = 0
     if df_gr is not None:
-        # בדיקה וטיפול בדילוג על 3 שורות (אם הכותרת לא בשורה הראשונה)
         if "שנת לימודים" not in df_gr.columns:
             df_gr.columns = df_gr.iloc[3]
             df_gr = df_gr[4:].reset_index(drop=True)
         
-        # סינון לשנת 2026 (חורף תשפ"ו)
         current_exams = df_gr[df_gr['שנת לימודים'].astype(str).str.contains("2026", na=False)]
         done_count = len(current_exams)
         
@@ -74,7 +74,6 @@ if st.session_state.step == 1:
         s_id = st.text_input("סמל מוסד")
         s_name = st.text_input("שם המוסד")
         
-        # הצגת שדה סיסמה רק עבור המנהל הכללי
         admin_pass = ""
         if s_id == "000000":
             admin_pass = st.text_input("סיסמת מנהל רשת", type="password")
@@ -93,12 +92,11 @@ if st.session_state.step == 1:
             else:
                 st.warning("נא למלא את כל השדות")
 
-# --- שלב 2: העלאת קבצים וניתוח ---
+# --- שלב 2: העלאאת קבצים וניתוח ---
 elif st.session_state.step == 2:
     st.title(f"שלום, מוסד {st.session_state.school_data['name']}")
     st.subheader("העלאת דוחות משרד החינוך")
     
-    # שדה סיסמה לאקסל (אם המנהל יודע שהקבצים שלו מוגנים)
     excel_p = st.text_input("אם קבצי האקסל מוגנים בסיסמה, הזן אותה כאן (אחרת השאר ריק):", type="password")
     
     col1, col2 = st.columns(2)
@@ -114,20 +112,18 @@ elif st.session_state.step == 2:
         if df_st is not None:
             s_count, target, done = process_data(df_st, df_gr)
             
-            # הצגת תוצאות
             st.divider()
             m1, m2, m3 = st.columns(3)
             m1.metric("תלמידים (י-יב)", s_count)
             m2.metric("יעד אירועי בחינה", f"{target:.1f}")
             m3.metric("בוצעו בפועל (2026)", done)
             
-            # כפתור דיווח
             if st.button("🚀 שלח דיווח סופי למנהל הרשת"):
                 report = {
                     "school_id": st.session_state.school_data["id"],
                     "school_name": st.session_state.school_data["name"],
                     "total_students": s_count,
-                    "target_exams": target,
+                    "target_exams": float(target),
                     "completed_exams": done
                 }
                 supabase.table("school_reports").upsert(report).execute()
