@@ -3,11 +3,21 @@ import pandas as pd
 from supabase import create_client
 import datetime
 
-# הגדרות בסיסיות
-st.set_page_config(page_title="מערכת בחינות 2026", layout="wide")
+# --- הגדרות ליבה ורשימת מקצועות (המיון שלך) ---
+SUBJECTS_ORDER = [
+    "תנ\"ך - עצמאי", "תנ\"ך עצמאי הגבר", "יהדות עצמאי", "יהדות עצמאי תניא", 
+    "יהדות עצמאי הגבר", "תושב\"ע חמ\"ד", "תושב\"ע חמ\"ד הגבר 5 יח\"ל",
+    "תלמוד חמ\"ד רגיל/עולה", "תלמוד חמ\"ד הגבר 5 יח\"ל רגיל/עולה", 
+    "תלמוד חמ\"ד הגבר 5 יח\"ל", "ספרות- לבי\"ס עצמאי", 
+    "ספרות עצמאי הגבר 5 יח\"ל רגיל/עולה", "עברית עצמאי", 
+    "היסטוריה עצמאי", "אזרחות", "אנגלית 3 יח\"ל רגיל", 
+    "אנגלית 3 יח\"ל ללא הכרה", "מתמטיקה 3 יח\"ל", "מתמטיקה 3 יח\"ל תוכנית חדשה"
+]
+
+st.set_page_config(page_title="ניהול בחינות 2026", layout="wide")
 st.markdown("""<style>body, .stApp {direction: rtl; text-align: right;}</style>""", unsafe_allow_html=True)
 
-# חיבור ל-Supabase דרך ה-Secrets
+# חיבור לענן
 @st.cache_resource
 def init_connection():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -17,61 +27,73 @@ supabase = init_connection()
 if 'step' not in st.session_state:
     st.session_state.step = 1
 
-# --- פונקציית דשבורד מנהל כללי ---
+# --- פונקציית ניתוח קבצים (המוח) ---
+def process_files(student_file, grades_file):
+    # כאן נכנסת הלוגיקה של דילוג 3 שורות וזיהוי שנתונים
+    df_students = pd.read_excel(student_file)
+    # ספירת תלמידים י-יב
+    count = len(df_students[df_students['שכבה/ כיתת אם'].str.contains("י'|י''א|י''ב", na=False)])
+    target = count * 5.5
+    return count, target
+
+# --- מסך מנהל כללי ---
 def show_admin_dashboard():
-    st.title("👑 דשבורד מנהל כללי - תמונת מצב רשתית")
-    try:
-        res = supabase.table("school_reports").select("*").execute()
-        if res.data:
-            df = pd.DataFrame(res.data)
-            df['אחוז ביצוע'] = (df['completed_exams'] / df['target_exams'] * 100).round(1)
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.info("טרם התקבלו דיווחים מהמוסדות.")
-    except Exception as e:
-        st.error(f"שגיאה במשיכת נתונים: {e}")
-    
-    if st.button("חזרה למסך ראשי"):
+    st.title("👑 דשבורד מנהל כללי")
+    res = supabase.table("school_reports").select("*").execute()
+    if res.data:
+        df = pd.DataFrame(res.data)
+        st.write("תמונת מצב רשתית:")
+        st.dataframe(df)
+    if st.button("יציאה"):
         st.session_state.step = 1
         st.rerun()
 
-# --- שלב 1: הזדהות ---
+# --- שלב 1: כניסה ---
 if st.session_state.step == 1:
-    st.title("🛡️ מערכת ניהול בחינות 2026 - כניסה")
-    with st.form("login"):
-        school_id = st.text_input("סמל מוסד")
-        school_name = st.text_input("שם המוסד")
-        submitted = st.form_submit_button("המשך")
+    st.title("🛡️ כניסה למערכת")
+    with st.form("login_form"):
+        s_id = st.text_input("סמל מוסד")
+        s_name = st.text_input("שם המוסד")
+        if s_id == "000000":
+            password = st.text_input("סיסמת מנהל", type="password")
         
+        submitted = st.form_submit_button("התחבר")
         if submitted:
-            if school_id == "000000": # קוד סודי עבורך
-                st.session_state.step = "admin"
-                st.rerun()
-            elif school_id and school_name:
-                st.session_state.school_data = {"סמל": school_id, "שם": school_name}
+            if s_id == "000000":
+                if password == st.secrets["ADMIN_PASSWORD"]:
+                    st.session_state.step = "admin"
+                    st.rerun()
+                else:
+                    st.error("סיסמה שגויה")
+            else:
+                st.session_state.school_data = {"סמל": s_id, "שם": s_name}
                 st.session_state.step = 2
                 st.rerun()
 
-# --- שלב 2: ניתוח ושמירה ---
+# --- שלב 2: העלאה וניתוח ---
 elif st.session_state.step == 2:
-    st.title(f"📂 ניתוח נתונים: {st.session_state.school_data['שם']}")
+    st.header(f"שלום למוסד: {st.session_state.school_data['שם']}")
     
-    # כאן המנהל יעלה את הקבצים (כרגע סימולציה של שמירה)
-    st.info("כאן המערכת תבצע את ניתוח האקסלים שהעלית.")
+    col1, col2 = st.columns(2)
+    with col1:
+        st_file = st.file_uploader("העלה מצבת תלמידים", type=['xlsx'])
+    with col2:
+        gr_file = st.file_uploader("העלה ציוני חורף (אופציונלי)", type=['xlsx'])
     
-    # כפתור דיווח להנהלה
-    if st.button("🚀 סיים ודווח להנהלה"):
-        data = {
-            "school_id": st.session_state.school_data["סמל"],
-            "school_name": st.session_state.school_data["שם"],
-            "completed_exams": 100, # נתון שיחושב מהאקסל
-            "target_exams": 550,   # נתון שיחושב מהאקסל
-        }
-        try:
+    if st_file:
+        count, target = process_files(st_file, gr_file)
+        st.metric("סה\"כ תלמידים (י-יב)", count)
+        st.metric("יעד אירועי בחינה", target)
+        
+        if st.button("🚀 דווח סופי להנהלה"):
+            data = {
+                "school_id": st.session_state.school_data["סמל"],
+                "school_name": st.session_state.school_data["שם"],
+                "total_students": count,
+                "target_exams": target
+            }
             supabase.table("school_reports").upsert(data).execute()
-            st.success("הנתונים נשמרו בהצלחה בדשבורד המנהל הכללי!")
-        except Exception as e:
-            st.error(f"שגיאה בשמירה: {e}")
+            st.success("דווח בהצלחה!")
 
 elif st.session_state.step == "admin":
     show_admin_dashboard()
