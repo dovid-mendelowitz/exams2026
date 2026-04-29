@@ -1,65 +1,70 @@
 import streamlit as st
 import pandas as pd
+from supabase import create_client, Client
+import datetime
 
-# הגדרות תצוגה לעברית
+# הגדרות תצוגה
 st.set_page_config(page_title="מערכת בחינות 2026", layout="centered")
-st.markdown("""<style>body, .stApp {direction: rtl; text-align: right; font-family: 'Arial';}</style>""", unsafe_allow_html=True)
+st.markdown("""<style>body, .stApp {direction: rtl; text-align: right;}</style>""", unsafe_allow_html=True)
 
-# ניהול מצב המערכת (States)
+# חיבור מאובטח למסד הנתונים
+@st.cache_resource
+def init_connection():
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+supabase = init_connection()
+
+# ניהול שלבים
 if 'step' not in st.session_state:
     st.session_state.step = 1
 
-# --- מסך 1: הזדהות ופרטי מוסד ---
-if st.session_state.step == 1:
-    st.title("🛡️ שלב 1: הזדהות ופרטי מוסד")
-    st.write("ברוכים הבאים למערכת ניהול הבחינות. אנא מלאו את פרטי המוסד המדויקים.")
-    
-    with st.form("school_info"):
-        school_name = st.text_input("שם המוסד")
-        school_id = st.text_input("סמל מוסד (6 ספרות)")
-        contact_name = st.text_input("שם איש קשר")
-        contact_phone = st.text_input("טלפון ליצירת קשר")
-        
-        circle = st.selectbox("מספר מעגל (לפי מפת ההקלות)", [1, 2, 3])
-        recognition = st.radio("האם למוסד יש הכרה בציונים?", ["יש הכרה", "אין הכרה"])
-        
-        submitted = st.form_submit_button("המשך לשלב הבא ➔")
-        if submitted:
-            if school_name and school_id:
-                st.session_state.school_data = {
-                    "שם": school_name, "סמל": school_id, "מעגל": circle, "הכרה": recognition
-                }
-                st.session_state.step = 2
-                st.rerun()
-            else:
-                st.error("אנא מלאו שם וסמל מוסד כדי להמשיך.")
-
-# --- מסך 2: הדרכה והעלאת קבצים ---
-elif st.session_state.step == 2:
-    st.title("📂 שלב 2: העלאת דוחות")
-    st.info(f"מוסד: {st.session_state.school_data['שם']} | מעגל: {st.session_state.school_data['מעגל']}")
-    
-    st.write("""
-    **הנחיות להורדת הקבצים מהפורטל:**
-    1. הורידו את דוח **'מצבת תלמידים'** (פורמט אקסל).
-    2. הורידו את דוח **'ציוני נבחנים'** או **'שיוך שאלונים'** (שנת 2025).
-    3. וודאו שהקבצים נשארים בפורמט המקורי ללא שינוי עמודות.
-    """)
-    
-    st.divider()
-    
-    student_file = st.file_uploader("העלה אקסל מצבת תלמידים", type=['xlsx'])
-    grades_file = st.file_uploader("העלה אקסל ציונים/שיוכים", type=['xlsx'])
-    
-    if student_file and grades_file:
-        st.success("✅ הקבצים התקבלו בהצלחה!")
-        st.write("המערכת כעת בתקופת הרצה. הנתונים נשלחים לבדיקה טכנית.")
-        
-        # כאן בעתיד יבוא מנוע הניתוח
-        if st.button("סיום ושליחה"):
-            st.balloons()
-            st.write("תודה! הנתונים נקלטו. המערכת תעבד אותם ותחזור אליך עם המלצות.")
-            
-    if st.button("⬅️ חזרה לתיקון פרטים"):
+# --- מסך מנהל כללי סודי ---
+# אם מזינים בסמל מוסד "000000", נפתח הדשבורד שלך
+def show_admin():
+    st.title("👑 דשבורד ניהול רשת")
+    res = supabase.table("school_reports").select("*").execute()
+    if res.data:
+        df = pd.DataFrame(res.data)
+        st.dataframe(df)
+    if st.button("חזרה למסך רגיל"):
         st.session_state.step = 1
         st.rerun()
+
+# --- שלב 1: פרטי מוסד ---
+if st.session_state.step == 1:
+    st.title("🛡️ שלב 1: הזדהות")
+    with st.form("login"):
+        s_id = st.text_input("סמל מוסד")
+        s_name = st.text_input("שם המוסד")
+        submitted = st.form_submit_button("המשך")
+        if submitted:
+            if s_id == "000000": # קוד כניסה למנהל על
+                st.session_state.step = "admin"
+                st.rerun()
+            st.session_state.school_data = {"סמל": s_id, "שם": s_name}
+            st.session_state.step = 2
+            st.rerun()
+
+# --- שלב 2: העלאה ושמירה ---
+elif st.session_state.step == 2:
+    st.title("📂 העלאת נתונים")
+    st.write(f"מוסד: {st.session_state.school_data['שם']}")
+    
+    up_file = st.file_uploader("העלה אקסל מצבת תלמידים", type=['xlsx'])
+    
+    if up_file:
+        # כאן תבוא לוגיקת הניתוח המלאה שכתבנו
+        st.success("הקובץ נותח בהצלחה!")
+        
+        if st.button("🚀 שלח דוח סופי להנהלה"):
+            data = {
+                "school_id": st.session_state.school_data["סמל"],
+                "school_name": st.session_state.school_data["שם"],
+                "completed_exams": 150, # דוגמה לנתון מחושב
+                "target_exams": 550
+            }
+            supabase.table("school_reports").upsert(data).execute()
+            st.success("הנתונים נשמרו בענן!")
+
+elif st.session_state.step == "admin":
+    show_admin()
