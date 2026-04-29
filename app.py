@@ -46,23 +46,55 @@ def load_excel_safely(uploaded_file, password=None):
         st.error(f"לא ניתן לפתוח את הקובץ. ודא שהסיסמה נכונה. שגיאה: {e}")
         return None
 
+
 def process_data(df_st, df_gr):
-    """מנתח את מצבת התלמידים והציונים"""
-    mask = df_st['שכבה/ כיתת אם'].astype(str).str.contains("י'|י''א|י''ב", na=False)
-    student_count = len(df_st[mask])
+    """מנתח את מצבת התלמידים והציונים עם זיהוי חכם של שורת הכותרת"""
+    # --- 1. ניתוח מצבת תלמידים ---
+    # ניקוי רווחים משמות העמודות לביטחון
+    df_st.columns = df_st.columns.astype(str).str.strip()
+    
+    # חיפוש גמיש של עמודת הכיתה (למקרה שמשרד החינוך שינה מעט את השם)
+    class_col = next((col for col in df_st.columns if 'שכבה' in col or 'כיתת אם' in col), None)
+    
+    if class_col:
+        mask = df_st[class_col].astype(str).str.contains("י'|י''א|י''ב", na=False)
+        student_count = len(df_st[mask])
+    else:
+        student_count = 0
+        st.error("⚠️ לא נמצאה עמודת 'שכבה/כיתת אם' בקובץ התלמידים.")
+        
     target = student_count * 5.5
     
+    # --- 2. ניתוח ציונים (עם רדאר חכם) ---
     done_count = 0
     if df_gr is not None:
-        if "שנת לימודים" not in df_gr.columns:
-            df_gr.columns = df_gr.iloc[3]
-            df_gr = df_gr[4:].reset_index(drop=True)
+        header_found = False
+        df_gr.columns = df_gr.columns.astype(str).str.strip()
         
-        current_exams = df_gr[df_gr['שנת לימודים'].astype(str).str.contains("2026", na=False)]
-        done_count = len(current_exams)
+        # האם הכותרת כבר ממוקמת נכון בשורה הראשונה?
+        if "שנת לימודים" in df_gr.columns:
+            header_found = True
+        else:
+            # סריקת 15 השורות הראשונות כדי למצוא את כותרות הטבלה האמיתיות
+            for i in range(min(15, len(df_gr))):
+                row_values = df_gr.iloc[i].astype(str).str.strip().tolist()
+                if "שנת לימודים" in row_values:
+                    # מצאנו! נגדיר את השורה הזו ככותרות העמודות
+                    df_gr.columns = df_gr.iloc[i].astype(str).str.strip()
+                    # נחתוך את כל מה שמעל הכותרות
+                    df_gr = df_gr.iloc[i+1:].reset_index(drop=True)
+                    header_found = True
+                    break
         
+        if header_found:
+            # חישוב הביצוע בפועל (מחפש את המילה 2026 בתוך העמודה)
+            current_exams = df_gr[df_gr['שנת לימודים'].astype(str).str.contains("2026", na=False)]
+            done_count = len(current_exams)
+        else:
+            st.error("⚠️ לא הצלחתי לזהות את עמודת 'שנת לימודים' בקובץ. אנא ודא שהעלית את דוח הציונים/שאלונים הנכון.")
+            
     return student_count, target, done_count
-
+    
 # --- ניהול שלבי האפליקציה ---
 if 'step' not in st.session_state:
     st.session_state.step = 1
