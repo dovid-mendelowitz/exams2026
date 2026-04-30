@@ -32,20 +32,30 @@ SUBJECTS_ORDER = [
 # --- פונקציות עזר לניתוח ---
 
 def load_excel_safely(uploaded_file, password=None):
-    """טוען אקסל גם אם הוא מוגן בסיסמה בעזרת msoffcrypto"""
+    """טוען אקסל (תומך במספר לשוניות וחסין למצב של קבצים מעורבים)"""
     try:
+        uploaded_file.seek(0) # מוודאים שאנחנו קוראים מתחילת הקובץ
+        
         if password:
-            office_file = msoffcrypto.OfficeFile(uploaded_file)
-            office_file.load_key(password=password)
-            decrypted = io.BytesIO()
-            office_file.decrypt(decrypted)
-            return pd.read_excel(decrypted)
+            try:
+                # ניסיון 1: נניח שהקובץ מוגן וננסה לפתוח את המנעול
+                office_file = msoffcrypto.OfficeFile(uploaded_file)
+                office_file.load_key(password=password)
+                decrypted = io.BytesIO()
+                office_file.decrypt(decrypted)
+                return pd.read_excel(decrypted, sheet_name=None)
+            except Exception:
+                # ניסיון 2: הפריצה נכשלה כי אין מנעול! הקובץ חופשי.
+                # נחזיר את הקריאה להתחלה ונקרא אותו כרגיל
+                uploaded_file.seek(0)
+                return pd.read_excel(uploaded_file, sheet_name=None)
         else:
-            return pd.read_excel(uploaded_file)
+            # אם שדה הסיסמה ריק מראש, קריאה רגילה
+            return pd.read_excel(uploaded_file, sheet_name=None)
+            
     except Exception as e:
-        st.error(f"לא ניתן לפתוח את הקובץ. ודא שהסיסמה נכונה. שגיאה: {e}")
+        st.error(f"שגיאה בפתיחת הקובץ. אם לפחות אחד הקבצים מוגן בסיסמה, ודא שהזנת אותה למעלה. (שגיאה טכנית: {e})")
         return None
-
 
 def process_data(df_st, df_gr):
     """מנתח את מצבת התלמידים והציונים עם זיהוי חכם של שורת הכותרת"""
