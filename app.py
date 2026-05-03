@@ -5,10 +5,10 @@ import io
 import msoffcrypto
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="מערכת ניהול בחינות 2026", layout="wide")
+st.set_page_config(page_title="מערכת זינוק 2026", layout="wide")
 st.markdown("""<style>body, .stApp {direction: rtl; text-align: right;}</style>""", unsafe_allow_html=True)
 
-# --- חיבור לענן (Supabase) ---
+# --- חיבור ל-Supabase ---
 @st.cache_resource
 def init_connection():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -16,172 +16,167 @@ def init_connection():
 try:
     supabase = init_connection()
 except Exception as e:
-    st.error("שגיאה בחיבור למסד הנתונים. ודא שהגדרת את ה-Secrets כראוי.")
+    st.error("שגיאה בחיבור למסד הנתונים.")
 
-# --- רשימת 19 המקצועות לפי סדר המיון שלך ---
-SUBJECTS_ORDER = [
-    "תנ\"ך - עצמאי", "תנ\"ך עצמאי הגבר", "יהדות עצמאי", "יהדות עצמאי תניא", 
-    "יהדות עצמאי הגבר", "תושב\"ע חמ\"ד", "תושב\"ע חמ\"ד הגבר 5 יח\"ל",
-    "תלמוד חמ\"ד רגיל/עולה", "תלמוד חמ\"ד הגבר 5 יח\"ל רגיל/עולה", 
-    "תלמוד חמ\"ד הגבר 5 יח\"ל", "ספרות- לבי\"ס עצמאי", 
-    "ספרות עצמאי הגבר 5 יח\"ל רגיל/עולה", "עברית עצמאי", 
-    "היסטוריה עצמאי", "אזרחות", "אנגלית 3 יח\"ל רגיל", 
-    "אנגלית 3 יח\"ל ללא הכרה", "מתמטיקה 3 יח\"ל", "מתמטיקה 3 יח\"ל תוכנית חדשה"
-]
+# --- הגדרות מקצועות וקושי (מבוסס על המיקודים) ---
+SUBJECTS_META = {
+    "תנ\"ך": {"level": "בינוני", "info": "פרקי בחירה ושאלות נושא"},
+    "היסטוריה": {"level": "קשה", "info": "שינון רחב של תהליכים"},
+    "ספרות": {"level": "קל-בינוני", "info": "ניתוח יצירות ושירים"},
+    "אזרחות": {"level": "קל", "info": "מושגי יסוד ודמוקרטיה"},
+    "יהדות": {"level": "בינוני", "info": "הלכות שבת, כשרות ותפילה"},
+    "תושב\"ע": {"level": "בינוני-קשה", "info": "מסלולי משנה או גמרא"}
+}
 
-# --- פונקציות עזר לניתוח ---
+# --- פונקציות טכניות ---
 
 def load_excel_safely(uploaded_file, password=None):
-    """טוען אקסל (תומך במספר לשוניות וחסין למצב של קבצים מעורבים)"""
+    """פתיחת אקסל מוגן בסיסמה או רגיל"""
     try:
-        uploaded_file.seek(0) # מוודאים שאנחנו קוראים מתחילת הקובץ
-        
+        uploaded_file.seek(0)
         if password:
             try:
-                # ניסיון 1: נניח שהקובץ מוגן וננסה לפתוח את המנעול
                 office_file = msoffcrypto.OfficeFile(uploaded_file)
                 office_file.load_key(password=password)
                 decrypted = io.BytesIO()
                 office_file.decrypt(decrypted)
                 return pd.read_excel(decrypted, sheet_name=None)
-            except Exception:
-                # ניסיון 2: הפריצה נכשלה כי אין מנעול! הקובץ חופשי.
-                # נחזיר את הקריאה להתחלה ונקרא אותו כרגיל
+            except:
                 uploaded_file.seek(0)
                 return pd.read_excel(uploaded_file, sheet_name=None)
-        else:
-            # אם שדה הסיסמה ריק מראש, קריאה רגילה
-            return pd.read_excel(uploaded_file, sheet_name=None)
-            
+        return pd.read_excel(uploaded_file, sheet_name=None)
     except Exception as e:
-        st.error(f"שגיאה בפתיחת הקובץ. אם לפחות אחד הקבצים מוגן בסיסמה, ודא שהזנת אותה למעלה. (שגיאה טכנית: {e})")
+        st.error(f"שגיאה בקובץ: {e}")
         return None
 
-def process_data(df_st, df_gr):
-    """מנתח את מצבת התלמידים והציונים עם זיהוי חכם של שורת הכותרת"""
-    # --- 1. ניתוח מצבת תלמידים ---
-    # ניקוי רווחים משמות העמודות לביטחון
-    df_st.columns = df_st.columns.astype(str).str.strip()
+def analyze_data(dict_st, dict_gr):
+    """ניתוח מצבת תלמידים וציונים"""
+    res = {"students": 0, "completed": 0}
     
-    # חיפוש גמיש של עמודת הכיתה (למקרה שמשרד החינוך שינה מעט את השם)
-    class_col = next((col for col in df_st.columns if 'שכבה' in col or 'כיתת אם' in col), None)
-    
-    if class_col:
-        mask = df_st[class_col].astype(str).str.contains("י'|י''א|י''ב", na=False)
-        student_count = len(df_st[mask])
-    else:
-        student_count = 0
-        st.error("⚠️ לא נמצאה עמודת 'שכבה/כיתת אם' בקובץ התלמידים.")
-        
-    target = student_count * 5.5
-    
-    # --- 2. ניתוח ציונים (עם רדאר חכם) ---
-    done_count = 0
-    if df_gr is not None:
-        header_found = False
-        df_gr.columns = df_gr.columns.astype(str).str.strip()
-        
-        # האם הכותרת כבר ממוקמת נכון בשורה הראשונה?
-        if "שנת לימודים" in df_gr.columns:
-            header_found = True
-        else:
-            # סריקת 15 השורות הראשונות כדי למצוא את כותרות הטבלה האמיתיות
-            for i in range(min(15, len(df_gr))):
-                row_values = df_gr.iloc[i].astype(str).str.strip().tolist()
-                if "שנת לימודים" in row_values:
-                    # מצאנו! נגדיר את השורה הזו ככותרות העמודות
-                    df_gr.columns = df_gr.iloc[i].astype(str).str.strip()
-                    # נחתוך את כל מה שמעל הכותרות
-                    df_gr = df_gr.iloc[i+1:].reset_index(drop=True)
-                    header_found = True
-                    break
-        
-        if header_found:
-            # חישוב הביצוע בפועל (מחפש את המילה 2026 בתוך העמודה)
-            current_exams = df_gr[df_gr['שנת לימודים'].astype(str).str.contains("2026", na=False)]
-            done_count = len(current_exams)
-        else:
-            st.error("⚠️ לא הצלחתי לזהות את עמודת 'שנת לימודים' בקובץ. אנא ודא שהעלית את דוח הציונים/שאלונים הנכון.")
-            
-    return student_count, target, done_count
-    
-# --- ניהול שלבי האפליקציה ---
-if 'step' not in st.session_state:
-    st.session_state.step = 1
+    # ניתוח מצבת (תלמידים משובצים בלבד כיתות י-יב)
+    if dict_st:
+        for df in dict_st.values():
+            df.columns = df.columns.astype(str).str.strip()
+            c_col = next((c for c in df.columns if 'שכבה' in c or 'כיתת אם' in c), None)
+            s_col = next((c for c in df.columns if 'סטטוס' in c), None)
+            if c_col and s_col:
+                mask = (df[c_col].astype(str).str.contains("י'|י''א|י''ב", na=False)) & \
+                       (df[s_col].astype(str).str.strip() == 'משובץ')
+                res["students"] += len(df[mask])
 
-# --- שלב 1: מסך כניסה ---
+    # ניתוח ציונים (חורף תשפ"ו בלבד)
+    if dict_gr:
+        for df in dict_gr.values():
+            header_row = -1
+            for i in range(min(15, len(df))):
+                if any("מועד" in str(val) for val in df.iloc[i]):
+                    header_row = i
+                    break
+            if header_row != -1:
+                df.columns = df.iloc[header_row].astype(str).str.strip()
+                df = df.iloc[header_row+1:]
+                if "מועד" in df.columns and "ציון סופי" in df.columns:
+                    mask = (df['מועד'].astype(str).str.contains("1/2026|תשפ\"ו", na=False)) & \
+                           (df['ציון סופי'].notna())
+                    res["completed"] += len(df[mask])
+    return res
+
+# --- ניהול שלבים ---
+if 'step' not in st.session_state: st.session_state.step = 1
+
+# --- שלב 1: כניסה ---
 if st.session_state.step == 1:
-    st.title("🛡️ מערכת זינוק 2026 - כניסה מאובטחת")
+    st.title("🛡️ זינוק 2026 - כניסה")
     with st.form("login"):
         s_id = st.text_input("סמל מוסד")
-        s_name = st.text_input("שם המוסד")
-        
-        admin_pass = ""
-        if s_id == "000000":
-            admin_pass = st.text_input("סיסמת מנהל רשת", type="password")
-            
+        s_name = st.text_input("שם מוסד")
         if st.form_submit_button("התחבר"):
-            if s_id == "000000":
-                if admin_pass == st.secrets["ADMIN_PASSWORD"]:
-                    st.session_state.step = "admin"
-                    st.rerun()
-                else:
-                    st.error("סיסמת מנהל שגויה!")
-            elif s_id and s_name:
-                st.session_state.school_data = {"id": s_id, "name": s_name}
+            if len(s_id) == 6 and s_name:
+                st.session_state.school_id = s_id
+                st.session_state.school_name = s_name
                 st.session_state.step = 2
                 st.rerun()
-            else:
-                st.warning("נא למלא את כל השדות")
 
-# --- שלב 2: העלאאת קבצים וניתוח ---
+# --- שלב 2: הגדרות ואנשי קשר ---
 elif st.session_state.step == 2:
-    st.title(f"שלום, מוסד {st.session_state.school_data['name']}")
-    st.subheader("העלאת דוחות משרד החינוך")
-    
-    excel_p = st.text_input("אם קבצי האקסל מוגנים בסיסמה, הזן אותה כאן (אחרת השאר ריק):", type="password")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st_file = st.file_uploader("1. העלה מצבת תלמידים (XLSX)", type=['xlsx'])
-    with col2:
-        gr_file = st.file_uploader("2. העלה קובץ ציונים/שאלונים (XLSX)", type=['xlsx'])
-    
-    if st_file:
-        df_st = load_excel_safely(st_file, excel_p)
-        df_gr = load_excel_safely(gr_file, excel_p) if gr_file else None
+    st.title(f"הגדרות מוסד: {st.session_state.school_name}")
+    with st.form("school_setup"):
+        col1, col2 = st.columns(2)
+        circle = col1.selectbox("שיוך למעגל", [1, 2, 3, 4])
+        recognition = col1.radio("הכרה", ["עם הכרה", "ללא הכרה"])
+        finish_11 = col2.checkbox("האם המוסד מסיים בכיתה י\"א?")
         
-        if df_st is not None:
-            s_count, target, done = process_data(df_st, df_gr)
-            
-            st.divider()
-            m1, m2, m3 = st.columns(3)
-            m1.metric("תלמידים (י-יב)", s_count)
-            m2.metric("יעד אירועי בחינה", f"{target:.1f}")
-            m3.metric("בוצעו בפועל (2026)", done)
-            
-            if st.button("🚀 שלח דיווח סופי למנהל הרשת"):
-                report = {
-                    "school_id": st.session_state.school_data["id"],
-                    "school_name": st.session_state.school_data["name"],
-                    "total_students": s_count,
-                    "target_exams": float(target),
-                    "completed_exams": done
+        st.subheader("👤 איש קשר חובה")
+        c1, c2, c3 = st.columns(3)
+        c_name = c1.text_input("שם מלא")
+        c_mail = c2.text_input("אימייל")
+        c_phone = c3.text_input("טלפון נייד")
+        
+        if st.form_submit_button("שמור והמשך"):
+            if c_name and c_mail and c_phone:
+                # שמירה ל-Supabase
+                school_data = {
+                    "school_id": st.session_state.school_id,
+                    "school_name": st.session_state.school_name,
+                    "circle": circle,
+                    "recognition": recognition
                 }
-                supabase.table("school_reports").upsert(report).execute()
-                st.success("הנתונים נשמרו בהצלחה!")
+                supabase.table("school_reports").upsert(school_data).execute()
+                
+                contact_data = {
+                    "school_id": st.session_state.school_id,
+                    "name": c_name, "email": c_mail, "phone": c_phone, "role": "מנהל/רכז"
+                }
+                supabase.table("school_contacts").insert(contact_data).execute()
+                
+                st.session_state.step = 3
+                st.rerun()
 
-# --- שלב אדמין: דשבורד מנהל רשת ---
-elif st.session_state.step == "admin":
-    st.title("👑 דשבורד מנהל רשת - תמונת מצב")
+# --- שלב 3: העלאת דוחות ---
+elif st.session_state.step == 3:
+    st.title("📂 העלאת דוחות (חלק ב')")
+    pw_guess = f"{st.session_state.school_name[:2].capitalize()}{st.session_state.school_id}"
+    st.info(f"הסיסמה המומלצת לקבצים: {pw_guess}")
     
-    res = supabase.table("school_reports").select("*").execute()
-    if res.data:
-        full_df = pd.DataFrame(res.data)
-        st.dataframe(full_df, use_container_width=True)
-    else:
-        st.info("אין עדיין דיווחים מהמוסדות.")
-        
-    if st.button("יציאה מהמערכת"):
-        st.session_state.step = 1
-        st.rerun()
+    pw = st.text_input("הזן סיסמת אקסל:", type="password")
+    
+    f1 = st.file_uploader("1. דוח תלמידים (שיבוץ)", type=['xlsx'])
+    f2 = st.file_uploader("2. דוח ציונים (חורף 2026)", type=['xlsx'])
+    f3 = st.file_uploader("3. דוח אוכלוסיות (מעגלים)", type=['xlsx'])
+    
+    if f1 and f2 and f3:
+        if st.button("בצע ניתוח נתונים"):
+            d1 = load_excel_safely(f1, pw)
+            d2 = load_excel_safely(f2, pw)
+            if d1 and d2:
+                st.session_state.stats = analyze_data(d1, d2)
+                st.session_state.step = 4
+                st.rerun()
+
+# --- שלב 4: מטריצת אסטרטגיה ---
+elif st.session_state.step == 4:
+    st.title("📊 מטריצת אסטרטגיה ובחירת מסלול")
+    stats = st.session_state.stats
+    target = stats["students"] * 5.5
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("תלמידים", stats["students"])
+    c2.metric("יעד אירועים (5.5)", f"{target:.1f}")
+    c3.metric("בוצעו בחורף", stats["completed"])
+    
+    st.divider()
+    st.subheader("💡 תכנון חלוקת עומס")
+    st.write("ניתן לפצל את התלמידים בין 'חזקים' (יותר בחינות) ל'חלשים' (פחות בחינות).")
+    
+    # מטריצת מקצועות דינמית
+    matrix = []
+    for sub, meta in SUBJECTS_META.items():
+        matrix.append({
+            "מקצוע": sub, "רמת קושי": meta["level"], "מידע": meta["info"],
+            "נבחנים בי\"א": False, "נבחנים בי\"ב": False
+        })
+    
+    st.data_editor(pd.DataFrame(matrix), use_container_width=True)
+    
+    if st.button("סיום ושליחת דוח סופי"):
+        st.success("הנתונים נשמרו. תודה על שיתוף הפעולה!")
