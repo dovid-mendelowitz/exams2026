@@ -24,20 +24,8 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- נתוני עזר: קטגוריות מקצועות (גנרי) ---
-SUBJECT_METADATA = {
-    "מקצוע עיוני א'": {"level": "בינוני", "pages": "40", "desc": "כולל פרקי בחירה ושאלות נושא"},
-    "מקצוע עיוני ב'": {"level": "קשה", "pages": "65", "desc": "חומר רחב ותהליכים מורכבים"},
-    "מקצוע חברתי א'": {"level": "קל-בינוני", "pages": "30", "desc": "מושגי יסוד ומרכיבי משטר"},
-    "מקצוע ספרותי א'": {"level": "קל", "pages": "25", "desc": "ניתוח יצירות ותוכן ספרותי"},
-    "מקצוע הלכתי א'": {"level": "בינוני", "pages": "50", "desc": "הלכות והנחיות מעשיות"},
-    "מקצוע הלכתי ב'": {"level": "בינוני-קשה", "pages": "55", "desc": "עיון במקורות ופרשנות"}
-}
-
-# --- פונקציות עיבוד נתונים ---
-
+# --- פונקציות עזר לטעינת נתונים ---
 def load_excel_safely(uploaded_file, password=None):
-    """טעינת קובץ אקסל עם תמיכה בסיסמה"""
     try:
         uploaded_file.seek(0)
         if password:
@@ -52,44 +40,39 @@ def load_excel_safely(uploaded_file, password=None):
                 return pd.read_excel(uploaded_file, sheet_name=None)
         return pd.read_excel(uploaded_file, sheet_name=None)
     except Exception as e:
-        st.error(f"שגיאה בטעינת הקובץ: {e}")
         return None
 
-def process_analysis(dict_st, dict_gr):
-    """ניתוח מצבת תלמידים וציונים"""
-    results = {"students": 0, "completed": 0, "special_ed": 0}
-    
+def analyze_data(dict_st, dict_gr):
+    results = {"students": 0, "completed": 0}
+    # ניתוח מצבת תלמידים
     if dict_st:
-        for sheet in dict_st.values():
-            sheet.columns = sheet.columns.astype(str).str.strip()
-            c_col = next((c for c in sheet.columns if 'שכבה' in c or 'כיתת אם' in c), None)
-            s_col = next((c for c in sheet.columns if 'סטטוס' in c), None)
+        for df in dict_st.values():
+            df.columns = df.columns.astype(str).str.strip()
+            c_col = next((c for c in df.columns if 'שכבה' in c or 'כיתת אם' in c), None)
+            s_col = next((c for c in df.columns if 'סטטוס' in c), None)
             if c_col and s_col:
-                mask = (sheet[c_col].astype(str).str.contains("י'|י''א|י''ב", na=False)) & \
-                       (sheet[s_col].astype(str).str.strip() == 'משובץ')
-                results["students"] += len(sheet[mask])
-
+                mask = (df[c_col].astype(str).str.contains("י'|י''א|י''ב", na=False)) & (df[s_col].astype(str).str.strip() == 'משובץ')
+                results["students"] += len(df[mask])
+    # ניתוח ציונים
     if dict_gr:
-        for sheet in dict_gr.values():
+        for df in dict_gr.values():
             header_row = -1
-            for i in range(min(15, len(sheet))):
-                if any("מועד" in str(v) for v in sheet.iloc[i]):
+            for i in range(min(15, len(df))):
+                if any("מועד" in str(val) for val in df.iloc[i]):
                     header_row = i
                     break
             if header_row != -1:
-                sheet.columns = sheet.iloc[header_row].astype(str).str.strip()
-                sheet = sheet.iloc[header_row+1:]
-                if "מועד" in sheet.columns and "ציון סופי" in sheet.columns:
-                    mask = (sheet['מועד'].astype(str).str.contains("חורף|1/2026", na=False)) & \
-                           (sheet['ציון סופי'].notna())
-                    results["completed"] += len(sheet[mask])
+                df.columns = df.iloc[header_row].astype(str).str.strip()
+                df = df.iloc[header_row+1:]
+                if "מועד" in df.columns and "ציון סופי" in df.columns:
+                    mask = (df['מועד'].astype(str).str.contains("1/2026|תשפ\"ו", na=False)) & (df['ציון סופי'].notna())
+                    results["completed"] += len(df[mask])
     return results
 
-# --- ניהול שלבי האפליקציה ---
-if 'step' not in st.session_state:
-    st.session_state.step = 1
+# --- ניהול שלבים ---
+if 'step' not in st.session_state: st.session_state.step = 1
 
-# --- שלב 1: הזדהות ---
+# שלב 1: כניסה
 if st.session_state.step == 1:
     st.title("🛡️ מערכת זינוק 2026 - כניסה")
     with st.form("login"):
@@ -102,39 +85,37 @@ if st.session_state.step == 1:
                 st.session_state.step = 2
                 st.rerun()
 
-# --- שלב 2: הגדרות מוסד ואנשי קשר ---
+# שלב 2: הגדרות ואנשי קשר
 elif st.session_state.step == 2:
     st.title(f"הגדרות עבור: {st.session_state.school_name}")
     with st.form("setup"):
         col1, col2 = st.columns(2)
         circle = col1.selectbox("שיוך למעגל", [1, 2, 3, 4, 5])
-        recog = col1.radio("סטטוס הכרה", ["מוסד מוכר", "מוסד שאינו מוכר"])
-        scope = col2.radio("שכבת סיום", ["כיתה י\"א", "כיתה י\"ב"])
-        
-        st.subheader("👤 איש קשר (חובה)")
+        recog = col1.radio("סטטוס הכרה", ["עם הכרה", "ללא הכרה"])
+        st.subheader("👤 איש קשר חובה")
         c_name = st.text_input("שם מלא")
-        c_mail = st.text_input("כתובת מייל")
+        c_mail = st.text_input("אימייל")
         c_phone = st.text_input("טלפון נייד")
         
         if st.form_submit_button("שמור והמשך"):
             if c_name and c_mail and c_phone:
-                if supabase:
-                    supabase.table("school_reports").upsert({
-                        "school_id": st.session_state.school_id,
-                        "school_name": st.session_state.school_name,
-                        "circle": circle,
-                        "recognition": recog
-                    }).execute()
+                supabase.table("school_reports").upsert({
+                    "school_id": st.session_state.school_id,
+                    "school_name": st.session_state.school_name,
+                    "circle": circle,
+                    "recognition": recog
+                }).execute()
+                supabase.table("school_contacts").insert({
+                    "school_id": st.session_state.school_id,
+                    "name": c_name, "email": c_mail, "phone": c_phone
+                }).execute()
                 st.session_state.step = 3
                 st.rerun()
 
-# --- שלב 3: העלאת דוחות ---
+# שלב 3: העלאת דוחות
 elif st.session_state.step == 3:
-    st.title("📂 העלאת דוחות")
-    suggested_pw = f"{st.session_state.school_name[:2].capitalize()}{st.session_state.school_id}"
-    st.info(f"הסיסמה האחידה שהוגדרה: {suggested_pw}")
-    
-    pw = st.text_input("הזן סיסמת אקסל:", type="password")
+    st.title("📂 העלאת דוחות משרד החינוך")
+    pw = st.text_input("הזן סיסמת אקסל (אם קיימת):", type="password")
     f1 = st.file_uploader("1. דוח מצבת (שיבוץ)", type=['xlsx'])
     f2 = st.file_uploader("2. דוח ציונים (חורף 2026)", type=['xlsx'])
     f3 = st.file_uploader("3. דוח אוכלוסיות (מעגלים)", type=['xlsx'])
@@ -144,30 +125,18 @@ elif st.session_state.step == 3:
             d1 = load_excel_safely(f1, pw)
             d2 = load_excel_safely(f2, pw)
             if d1 and d2:
-                st.session_state.results = process_analysis(d1, d2)
+                st.session_state.stats = analyze_data(d1, d2)
                 st.session_state.step = 4
                 st.rerun()
 
-# --- שלב 4: מטריצת אסטרטגיה ---
+# שלב 4: תוצאות ואסטרטגיה
 elif st.session_state.step == 4:
-    res = st.session_state.results
-    target = res["students"] * 5.5
-    st.title("📊 דשבורד אסטרטגי")
-    
-    m1, m2, m3 = st.columns(3)
-    m1.metric("תלמידים משובצים", res["students"])
-    m2.metric("יעד אירועים (5.5)", f"{target:.1f}")
-    m3.metric("בוצעו בפועל", res["completed"])
-    
-    st.divider()
-    st.subheader("📋 בחירת מסלולי היבחנות")
-    
-    matrix = []
-    for sub, meta in SUBJECT_METADATA.items():
-        matrix.append({
-            "מקצוע": sub, "קושי": meta["level"], "דפים": meta["pages"], "סטטוס": "זמין במיקוד"
-        })
-    st.data_editor(pd.DataFrame(matrix), use_container_width=True)
-    
-    if st.button("שמור אסטרטגיה"):
-        st.success("הנתונים נשמרו בהצלחה.")
+    st.title("📊 סיכום נתונים ואסטרטגיה")
+    stats = st.session_state.stats
+    target = stats["students"] * 5.5
+    st.metric("תלמידים", stats["students"])
+    st.metric("יעד אירועים", f"{target:.1f}")
+    st.metric("בוצעו בפועל", stats["completed"])
+    if st.button("סיום"):
+        st.session_state.step = 1
+        st.rerun()
