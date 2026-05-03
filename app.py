@@ -24,7 +24,7 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- פונקציות עזר לטעינת נתונים ---
+# --- פונקציות עיבוד נתונים ---
 def load_excel_safely(uploaded_file, password=None):
     try:
         uploaded_file.seek(0)
@@ -44,7 +44,6 @@ def load_excel_safely(uploaded_file, password=None):
 
 def analyze_data(dict_st, dict_gr):
     results = {"students": 0, "completed": 0}
-    # ניתוח מצבת תלמידים
     if dict_st:
         for df in dict_st.values():
             df.columns = df.columns.astype(str).str.strip()
@@ -53,7 +52,6 @@ def analyze_data(dict_st, dict_gr):
             if c_col and s_col:
                 mask = (df[c_col].astype(str).str.contains("י'|י''א|י''ב", na=False)) & (df[s_col].astype(str).str.strip() == 'משובץ')
                 results["students"] += len(df[mask])
-    # ניתוח ציונים
     if dict_gr:
         for df in dict_gr.values():
             header_row = -1
@@ -72,71 +70,85 @@ def analyze_data(dict_st, dict_gr):
 # --- ניהול שלבים ---
 if 'step' not in st.session_state: st.session_state.step = 1
 
-# שלב 1: כניסה
+# שלב 1: כניסה (כולל לוגיקת מנהל)
 if st.session_state.step == 1:
     st.title("🛡️ מערכת זינוק 2026 - כניסה")
     with st.form("login"):
         s_id = st.text_input("סמל מוסד (6 ספרות)")
         s_name = st.text_input("שם המוסד")
+        
+        # בדיקה האם המשתמש מנסה להיכנס כמנהל
+        admin_pass = ""
+        if s_id == "000000":
+            admin_pass = st.text_input("סיסמת מנהל מערכת", type="password")
+            
         if st.form_submit_button("התחבר"):
-            if len(s_id) == 6 and s_name:
+            if s_id == "000000":
+                # בדיקת סיסמה מול ה-Secrets של Streamlit
+                if admin_pass == st.secrets.get("ADMIN_PASSWORD", "1234"):
+                    st.session_state.step = "admin"
+                    st.rerun()
+                else:
+                    st.error("סיסמת מנהל שגויה")
+            elif len(s_id) == 6 and s_name:
                 st.session_state.school_id = s_id
                 st.session_state.school_name = s_name
                 st.session_state.step = 2
                 st.rerun()
+            else:
+                st.warning("נא למלא סמל מוסד תקין")
 
-# שלב 2: הגדרות ואנשי קשר
+# שלב אדמין: דשבורד מרכזי
+elif st.session_state.step == "admin":
+    st.title("👑 דשבורד מנהל רשת - ריכוז נתונים")
+    if st.button("התנתק"):
+        st.session_state.step = 1
+        st.rerun()
+        
+    res = supabase.table("school_reports").select("*").execute()
+    if res.data:
+        st.dataframe(pd.DataFrame(res.data), use_container_width=True)
+    else:
+        st.info("אין עדיין דיווחים במערכת.")
+
+# שלב 2: הגדרות מוסד (למשתמש רגיל)
 elif st.session_state.step == 2:
     st.title(f"הגדרות עבור: {st.session_state.school_name}")
     with st.form("setup"):
         col1, col2 = st.columns(2)
         circle = col1.selectbox("שיוך למעגל", [1, 2, 3, 4, 5])
         recog = col1.radio("סטטוס הכרה", ["עם הכרה", "ללא הכרה"])
-        st.subheader("👤 איש קשר חובה")
-        c_name = st.text_input("שם מלא")
+        c_name = st.text_input("שם איש קשר")
         c_mail = st.text_input("אימייל")
-        c_phone = st.text_input("טלפון נייד")
-        
+        c_phone = st.text_input("טלפון")
         if st.form_submit_button("שמור והמשך"):
             if c_name and c_mail and c_phone:
                 supabase.table("school_reports").upsert({
-                    "school_id": st.session_state.school_id,
-                    "school_name": st.session_state.school_name,
-                    "circle": circle,
-                    "recognition": recog
-                }).execute()
-                supabase.table("school_contacts").insert({
-                    "school_id": st.session_state.school_id,
-                    "name": c_name, "email": c_mail, "phone": c_phone
+                    "school_id": st.session_state.school_id, "school_name": st.session_state.school_name,
+                    "circle": circle, "recognition": recog
                 }).execute()
                 st.session_state.step = 3
                 st.rerun()
 
 # שלב 3: העלאת דוחות
 elif st.session_state.step == 3:
-    st.title("📂 העלאת דוחות משרד החינוך")
-    pw = st.text_input("הזן סיסמת אקסל (אם קיימת):", type="password")
-    f1 = st.file_uploader("1. דוח מצבת (שיבוץ)", type=['xlsx'])
-    f2 = st.file_uploader("2. דוח ציונים (חורף 2026)", type=['xlsx'])
-    f3 = st.file_uploader("3. דוח אוכלוסיות (מעגלים)", type=['xlsx'])
-    
+    st.title("📂 העלאת דוחות")
+    pw = st.text_input("סיסמת אקסל:", type="password")
+    f1 = st.file_uploader("1. דוח מצבת", type=['xlsx'])
+    f2 = st.file_uploader("2. דוח ציונים", type=['xlsx'])
+    f3 = st.file_uploader("3. דוח אוכלוסיות", type=['xlsx'])
     if f1 and f2 and f3:
-        if st.button("בצע ניתוח נתונים"):
-            d1 = load_excel_safely(f1, pw)
-            d2 = load_excel_safely(f2, pw)
+        if st.button("ניתוח נתונים"):
+            d1 = load_excel_safely(f1, pw); d2 = load_excel_safely(f2, pw)
             if d1 and d2:
                 st.session_state.stats = analyze_data(d1, d2)
                 st.session_state.step = 4
                 st.rerun()
 
-# שלב 4: תוצאות ואסטרטגיה
+# שלב 4: תוצאות
 elif st.session_state.step == 4:
-    st.title("📊 סיכום נתונים ואסטרטגיה")
-    stats = st.session_state.stats
-    target = stats["students"] * 5.5
-    st.metric("תלמידים", stats["students"])
-    st.metric("יעד אירועים", f"{target:.1f}")
-    st.metric("בוצעו בפועל", stats["completed"])
-    if st.button("סיום"):
+    st.title("📊 תוצאות")
+    st.write(f"תלמידים: {st.session_state.stats['students']}")
+    if st.button("חזרה"):
         st.session_state.step = 1
         st.rerun()
